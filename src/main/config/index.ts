@@ -15,7 +15,11 @@ export {
   setProfileStr,
   changeCurrentProfile,
   updateProfileItem,
-  convertMrsRuleset
+  convertMrsRuleset,
+  reloadCurrentProfileConfig,
+  getCurrentProfileChainedProxies,
+  upsertCurrentProfileChainedProxy,
+  removeCurrentProfileChainedProxy
 } from './profile'
 export {
   getOverrideConfig,

@@ -10,6 +10,7 @@ import { subStorePort } from '../resolve/server'
 import { mihomoUpgradeConfig } from '../core/mihomoApi'
 import { restartCore } from '../core/manager'
 import { addProfileUpdater, removeProfileUpdater } from '../core/profileUpdater'
+import { mainWindow } from '../window'
 import { mihomoProfileWorkDir, mihomoWorkDir, profileConfigPath, profilePath } from '../utils/dirs'
 import { createLogger } from '../utils/logger'
 import { getAppConfig } from './app'
@@ -177,6 +178,69 @@ export async function getCurrentProfileItem(): Promise<IProfileItem> {
   )
 }
 
+export async function getCurrentProfileChainedProxies(): Promise<IChainedProxyItem[]> {
+  const item = await getCurrentProfileItem()
+  return Array.isArray(item.chainedProxies) ? item.chainedProxies : []
+}
+
+export async function upsertCurrentProfileChainedProxy(
+  item: Omit<IChainedProxyItem, 'createdAt' | 'updatedAt'> & { createdAt?: number; updatedAt?: number }
+): Promise<IChainedProxyItem> {
+  const currentProfile = await getCurrentProfileItem()
+  const now = Date.now()
+  const chainedProxies = Array.isArray(currentProfile.chainedProxies)
+    ? [...currentProfile.chainedProxies]
+    : []
+  const existing = chainedProxies.find((value) => value.id === item.id)
+
+  const nextItem: IChainedProxyItem = {
+    ...item,
+    enabled: item.enabled ?? true,
+    createdAt: existing?.createdAt ?? item.createdAt ?? now,
+    updatedAt: now,
+    lastKnownType: item.lastKnownType ?? existing?.lastKnownType
+  }
+
+  await updateProfileConfig((config) => {
+    const index = config.items.findIndex((value) => value.id === currentProfile.id)
+    if (index === -1) {
+      throw new Error('Current profile not found')
+    }
+
+    const profileItem = config.items[index]
+    const list = Array.isArray(profileItem.chainedProxies) ? [...profileItem.chainedProxies] : []
+    const itemIndex = list.findIndex((value) => value.id === nextItem.id)
+    if (itemIndex === -1) {
+      list.push(nextItem)
+    } else {
+      list[itemIndex] = nextItem
+    }
+    profileItem.chainedProxies = list
+    return config
+  })
+
+  mainWindow?.webContents.send('profileConfigUpdated')
+  await reloadCurrentProfileConfig()
+  return nextItem
+}
+
+export async function removeCurrentProfileChainedProxy(id: string): Promise<void> {
+  const currentProfile = await getCurrentProfileItem()
+  await updateProfileConfig((config) => {
+    const index = config.items.findIndex((value) => value.id === currentProfile.id)
+    if (index === -1) {
+      throw new Error('Current profile not found')
+    }
+
+    const profileItem = config.items[index]
+    profileItem.chainedProxies = (profileItem.chainedProxies || []).filter((item) => item.id !== id)
+    return config
+  })
+
+  mainWindow?.webContents.send('profileConfigUpdated')
+  await reloadCurrentProfileConfig()
+}
+
 interface FetchOptions {
   url: string
   useProxy: boolean
@@ -323,28 +387,31 @@ export async function getProfileStr(id: string | undefined): Promise<string> {
   }
 }
 
+export async function reloadCurrentProfileConfig(): Promise<void> {
+  try {
+    const { generateProfile } = await import('../core/factory')
+    await generateProfile()
+    await mihomoUpgradeConfig()
+    profileLogger.info('Config reloaded successfully using mihomoUpgradeConfig')
+  } catch (error) {
+    profileLogger.error('Failed to reload config with mihomoUpgradeConfig', error)
+    try {
+      profileLogger.info('Falling back to restart core')
+      const { restartCore } = await import('../core/manager')
+      await restartCore()
+      profileLogger.info('Core restarted successfully')
+    } catch (restartError) {
+      profileLogger.error('Failed to restart core', restartError)
+      throw restartError
+    }
+  }
+}
+
 export async function setProfileStr(id: string, content: string): Promise<void> {
-  // 读取最新的配置
   const { current } = await getProfileConfig(true)
   await writeFile(profilePath(id), content, 'utf-8')
   if (current === id) {
-    try {
-      const { generateProfile } = await import('../core/factory')
-      await generateProfile()
-      await mihomoUpgradeConfig()
-      profileLogger.info('Config reloaded successfully using mihomoUpgradeConfig')
-    } catch (error) {
-      profileLogger.error('Failed to reload config with mihomoUpgradeConfig', error)
-      try {
-        profileLogger.info('Falling back to restart core')
-        const { restartCore } = await import('../core/manager')
-        await restartCore()
-        profileLogger.info('Core restarted successfully')
-      } catch (restartError) {
-        profileLogger.error('Failed to restart core', restartError)
-        throw restartError
-      }
-    }
+    await reloadCurrentProfileConfig()
   }
 }
 

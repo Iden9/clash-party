@@ -1,7 +1,11 @@
-import { Button, Card, CardBody } from '@heroui/react'
-import { mihomoUnfixedProxy } from '@renderer/utils/ipc'
+import { Button, Card, CardBody, Chip } from '@heroui/react'
+import { mihomoUnfixedProxy, removeCurrentProfileChainedProxy } from '@renderer/utils/ipc'
 import React, { useMemo, useState, useCallback } from 'react'
 import { FaMapPin } from 'react-icons/fa6'
+import { MdDelete, MdEdit } from 'react-icons/md'
+import { toast } from '@renderer/components/base/toast'
+import BaseConfirmModal from '@renderer/components/base/base-confirm-modal'
+import ChainedProxyDialog from './chained-proxy-dialog'
 import { useTranslation } from 'react-i18next'
 
 interface Props {
@@ -43,8 +47,14 @@ const ProxyItemBase: React.FC<Props> = (props) => {
   }, [proxy.history])
 
   const [loading, setLoading] = useState(false)
+  const [openEdit, setOpenEdit] = useState(false)
+  const [openDelete, setOpenDelete] = useState(false)
 
-  const isLoading = loading || isGroupTesting
+  const proxyChain = 'chain' in proxy ? proxy.chain : undefined
+  const proxyId = 'id' in proxy ? proxy.id : proxy.name
+  const isChainProxy = Boolean(proxyChain?.derived)
+  const isInvalidChainProxy = proxyChain?.status === 'invalid'
+  const isLoading = (loading || isGroupTesting) && !isInvalidChainProxy
 
   const delayText = useMemo(() => {
     if (delay === -1) return t('proxies.delay.test')
@@ -53,19 +63,58 @@ const ProxyItemBase: React.FC<Props> = (props) => {
   }, [delay, t])
 
   const onDelay = useCallback((): void => {
+    if (isInvalidChainProxy) return
     setLoading(true)
     onProxyDelay(proxy.name, group.testUrl).finally(() => {
       mutateProxies()
       setLoading(false)
     })
-  }, [proxy.name, group.testUrl, onProxyDelay, mutateProxies])
+  }, [proxy.name, group.testUrl, onProxyDelay, mutateProxies, isInvalidChainProxy])
 
   const fixed = useMemo(() => group.fixed && group.fixed === proxy.name, [group.fixed, proxy.name])
 
   return (
-    <Card
-      as="div"
-      onPress={() => onSelect(group.name, proxy.name)}
+    <>
+      {openEdit && isChainProxy && !('all' in proxy) && (
+        <ChainedProxyDialog
+          groupName={group.name}
+          proxies={group.all.filter((item): item is IMihomoProxy => !('all' in item) && !item.chain?.derived)}
+          initialValue={{
+            id: proxyChain?.id || proxyId,
+            name: proxy.name,
+            group: group.name,
+            dialerProxy: proxyChain?.dialerProxy || '',
+            landingProxy: proxyChain?.landingProxy || '',
+            enabled: true,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            lastKnownType: proxy.type
+          }}
+          onClose={() => setOpenEdit(false)}
+        />
+      )}
+      <BaseConfirmModal
+        title={t('proxies.chain.delete')}
+        content={t('proxies.chain.deleteConfirm', { name: proxy.name })}
+        isOpen={openDelete}
+        onCancel={() => setOpenDelete(false)}
+        onConfirm={async () => {
+          try {
+            await removeCurrentProfileChainedProxy(proxyChain?.id || proxyId)
+            toast.success(t('proxies.chain.deleted'))
+          } catch (error) {
+            toast.error(String(error))
+          } finally {
+            setOpenDelete(false)
+          }
+        }}
+      />
+      <Card
+        as="div"
+        onPress={() => {
+          if (isInvalidChainProxy) return
+          onSelect(group.name, proxy.name)
+        }}
       isPressable
       fullWidth
       shadow="sm"
@@ -81,11 +130,16 @@ const ProxyItemBase: React.FC<Props> = (props) => {
       <CardBody className="p-1">
         {proxyDisplayMode === 'full' ? (
           <div className="flex flex-col gap-1">
-            <div className="flex justify-between items-center pl-1">
-              <div className="text-ellipsis overflow-hidden whitespace-nowrap">
+            <div className="flex justify-between items-center pl-1 gap-2">
+              <div className="text-ellipsis overflow-hidden whitespace-nowrap flex items-center gap-1">
                 <div className="flag-emoji inline" title={proxy.name}>
                   {proxy.name}
                 </div>
+                {isChainProxy && (
+                  <Chip size="sm" color={isInvalidChainProxy ? 'danger' : 'primary'} variant="flat">
+                    {isInvalidChainProxy ? t('proxies.chain.invalid') : t('proxies.chain.tag')}
+                  </Chip>
+                )}
               </div>
               {fixed && (
                 <Button
@@ -103,11 +157,16 @@ const ProxyItemBase: React.FC<Props> = (props) => {
                 </Button>
               )}
             </div>
-            <div className="flex justify-between items-center pl-1">
-              <div className="flex gap-1 items-center">
+            <div className="flex justify-between items-center pl-1 gap-2">
+              <div className="flex gap-1 items-center overflow-hidden">
                 <div className="text-foreground-400 text-xs bg-default-100 px-1 rounded-md">
                   {proxy.type}
                 </div>
+                {isChainProxy && proxyChain?.reason && (
+                  <div className="text-foreground-400 text-xs truncate" title={proxyChain.reason}>
+                    {proxyChain.reason}
+                  </div>
+                )}
                 {['tfo', 'udp', 'xudp', 'mptcp', 'smux'].map(
                   (protocol) =>
                     proxy[protocol as keyof IMihomoProxy] && (
@@ -120,9 +179,37 @@ const ProxyItemBase: React.FC<Props> = (props) => {
                     )
                 )}
               </div>
+              {isChainProxy && (
+                <>
+                  <Button
+                    isIconOnly
+                    title={t('common.edit')}
+                    variant="light"
+                    className="h-full text-sm px-1 relative"
+                    onPress={() => {
+                      setOpenEdit(true)
+                    }}
+                  >
+                    <MdEdit className="text-lg" />
+                  </Button>
+                  <Button
+                    isIconOnly
+                    title={t('common.delete')}
+                    variant="light"
+                    color="danger"
+                    className="h-full text-sm px-1 relative"
+                    onPress={() => {
+                      setOpenDelete(true)
+                    }}
+                  >
+                    <MdDelete className="text-lg" />
+                  </Button>
+                </>
+              )}
               <Button
                 isIconOnly
                 title={proxy.type}
+                isDisabled={isInvalidChainProxy}
                 isLoading={isLoading}
                 color={delayColor(delay)}
                 onPress={onDelay}
@@ -134,11 +221,16 @@ const ProxyItemBase: React.FC<Props> = (props) => {
             </div>
           </div>
         ) : (
-          <div className="flex justify-between items-center pl-1">
-            <div className="text-ellipsis overflow-hidden whitespace-nowrap">
+          <div className="flex justify-between items-center pl-1 gap-2">
+            <div className="text-ellipsis overflow-hidden whitespace-nowrap flex items-center gap-1">
               <div className="flag-emoji inline" title={proxy.name}>
                 {proxy.name}
               </div>
+              {isChainProxy && (
+                <Chip size="sm" color={isInvalidChainProxy ? 'danger' : 'primary'} variant="flat">
+                  {isInvalidChainProxy ? t('proxies.chain.invalid') : t('proxies.chain.tag')}
+                </Chip>
+              )}
             </div>
             <div className="flex justify-end">
               {fixed && (
@@ -156,9 +248,37 @@ const ProxyItemBase: React.FC<Props> = (props) => {
                   <FaMapPin className="text-md le" />
                 </Button>
               )}
+              {isChainProxy && (
+                <>
+                  <Button
+                    isIconOnly
+                    title={t('common.edit')}
+                    variant="light"
+                    className="h-full text-sm px-1 relative"
+                    onPress={() => {
+                      setOpenEdit(true)
+                    }}
+                  >
+                    <MdEdit className="text-lg" />
+                  </Button>
+                  <Button
+                    isIconOnly
+                    title={t('common.delete')}
+                    variant="light"
+                    color="danger"
+                    className="h-full text-sm px-1 relative"
+                    onPress={() => {
+                      setOpenDelete(true)
+                    }}
+                  >
+                    <MdDelete className="text-lg" />
+                  </Button>
+                </>
+              )}
               <Button
                 isIconOnly
                 title={proxy.type}
+                isDisabled={isInvalidChainProxy}
                 isLoading={isLoading}
                 color={delayColor(delay)}
                 onPress={onDelay}
@@ -172,6 +292,7 @@ const ProxyItemBase: React.FC<Props> = (props) => {
         )}
       </CardBody>
     </Card>
+    </>
   )
 }
 

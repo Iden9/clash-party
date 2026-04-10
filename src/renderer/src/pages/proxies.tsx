@@ -15,6 +15,7 @@ import { MdVisibilityOff, MdDoubleArrow, MdOutlineSpeed } from 'react-icons/md'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { GroupedVirtuoso, GroupedVirtuosoHandle } from 'react-virtuoso'
 import ProxyItem from '@renderer/components/proxies/proxy-item'
+import ChainedProxyDialog from '@renderer/components/proxies/chained-proxy-dialog'
 import { IoIosArrowBack } from 'react-icons/io'
 import { useGroups } from '@renderer/hooks/use-groups'
 import CollapseInput from '@renderer/components/base/collapse-input'
@@ -98,6 +99,7 @@ const Proxies: React.FC = () => {
   const { virtuosoRef, isOpen, setIsOpen } = useProxyState(groups)
   const [delaying, setDelaying] = useState(Array(groups.length).fill(false))
   const [searchValue, setSearchValue] = useState(Array(groups.length).fill(''))
+  const [editingGroupIndex, setEditingGroupIndex] = useState<number | null>(null)
 
   // searchValue 初始化
   useEffect(() => {
@@ -185,6 +187,17 @@ const Proxies: React.FC = () => {
   const onProxyDelay = useCallback(async (proxy: string, url?: string): Promise<IMihomoDelay> => {
     return await mihomoProxyDelay(proxy, url)
   }, [])
+
+  const getCreatableProxies = useCallback(
+    (groupIndex: number): IMihomoProxy[] => {
+      return groups[groupIndex]?.all.filter((proxy): proxy is IMihomoProxy => {
+        if ('all' in proxy) return false
+        if (proxy.chain?.derived) return false
+        return !['Direct', 'Reject', 'RejectDrop', 'Pass', 'Dns', 'Compatible'].includes(proxy.type)
+      }) || []
+    },
+    [groups]
+  )
 
   const onGroupDelay = useCallback(
     async (index: number): Promise<void> => {
@@ -373,6 +386,16 @@ const Proxies: React.FC = () => {
                     <FaLocationCrosshairs className="text-lg text-foreground-500" />
                   </Button>
                   <Button
+                    title={t('proxies.chain.create')}
+                    variant="light"
+                    size="sm"
+                    onPress={() => {
+                      setEditingGroupIndex(index)
+                    }}
+                  >
+                    {t('proxies.chain.create')}
+                  </Button>
+                  <Button
                     title={t('proxies.delay.test')}
                     variant="light"
                     isLoading={delaying[index]}
@@ -466,10 +489,18 @@ const Proxies: React.FC = () => {
   )
 
   return (
-    <BasePage
-      title={t('proxies.title')}
-      header={
-        <>
+    <>
+      {editingGroupIndex !== null && groups[editingGroupIndex] && (
+        <ChainedProxyDialog
+          groupName={groups[editingGroupIndex].name}
+          proxies={getCreatableProxies(editingGroupIndex)}
+          onClose={() => setEditingGroupIndex(null)}
+        />
+      )}
+      <BasePage
+        title={t('proxies.title')}
+        header={
+          <>
           <Button
             size="sm"
             isIconOnly
@@ -555,7 +586,8 @@ const Proxies: React.FC = () => {
           />
         </div>
       )}
-    </BasePage>
+      </BasePage>
+    </>
   )
 }
 

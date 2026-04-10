@@ -1,11 +1,17 @@
 import axios, { AxiosInstance } from 'axios'
 import WebSocket from 'ws'
-import { getAppConfig, getControledMihomoConfig } from '../config'
+import { getAppConfig, getControledMihomoConfig, getCurrentProfileChainedProxies, getProfile, getProfileConfig } from '../config'
 import { mainWindow } from '../window'
 import { tray } from '../resolve/tray'
 import { calcTraffic } from '../utils/calc'
 import { floatingWindow } from '../resolve/floatingWindow'
 import { createLogger } from '../utils/logger'
+import {
+  applyChainedProxies,
+  buildChainedProxyStatus,
+  collectBaseProxies,
+  mapChainedReason
+} from '../utils/chainedProxy'
 import { getRuntimeConfig } from './factory'
 import { getMihomoIpcPath } from './manager'
 
@@ -102,28 +108,128 @@ export const mihomoProxies = async (): Promise<IMihomoProxies> => {
 export const mihomoGroups = async (): Promise<IMihomoMixedGroup[]> => {
   const { mode = 'rule' } = await getControledMihomoConfig()
   if (mode === 'direct') return []
-  const proxies = await mihomoProxies()
-  const runtime = await getRuntimeConfig()
+  const [proxies, runtime, chainedProxies, appConfig, profileConfig] = await Promise.all([
+    mihomoProxies(),
+    getRuntimeConfig(),
+    getCurrentProfileChainedProxies(),
+    getAppConfig(),
+    getProfileConfig()
+  ])
   const groups: IMihomoMixedGroup[] = []
+
+  let resolvedChained = new Map<string, ReturnType<typeof buildChainedProxyStatus>>()
+  if (chainedProxies.length > 0) {
+    try {
+      const baseProfile = await getProfile(profileConfig.current)
+      const availableProxies = await collectBaseProxies(
+        baseProfile,
+        profileConfig.current,
+        appConfig.diffWorkDir ?? false
+      )
+      const chainedResult = applyChainedProxies(baseProfile, chainedProxies, availableProxies)
+      resolvedChained = new Map(
+        chainedResult.resolvedItems.map((item) => [item.name, buildChainedProxyStatus(item)])
+      )
+    } catch (error) {
+      mihomoApiLogger.warn('Failed to resolve chained proxies', error)
+    }
+  }
+
   runtime?.['proxy-groups']?.forEach((group: { name: string; url?: string }) => {
     const { name, url } = group
     if (proxies.proxies[name] && 'all' in proxies.proxies[name] && !proxies.proxies[name].hidden) {
       const newGroup = proxies.proxies[name]
       newGroup.testUrl = url
-      const newAll = (newGroup.all || []).map((name) => proxies.proxies[name])
+      const newAll = (newGroup.all || [])
+        .map((proxyName) => {
+          const proxy = proxies.proxies[proxyName]
+          if (!proxy) return undefined
+          if ('all' in proxy) return proxy
+          const chain = resolvedChained.get(proxy.name)
+          return chain ? { ...proxy, chain } : proxy
+        })
+        .filter(Boolean) as (IMihomoProxy | IMihomoGroup)[]
       groups.push({ ...newGroup, all: newAll })
     }
   })
   if (!groups.find((group) => group.name === 'GLOBAL')) {
     const newGlobal = proxies.proxies['GLOBAL'] as IMihomoGroup
     if (!newGlobal.hidden) {
-      const newAll = (newGlobal.all || []).map((name) => proxies.proxies[name])
+      const newAll = (newGlobal.all || [])
+        .map((proxyName) => {
+          const proxy = proxies.proxies[proxyName]
+          if (!proxy) return undefined
+          if ('all' in proxy) return proxy
+          const chain = resolvedChained.get(proxy.name)
+          return chain ? { ...proxy, chain } : proxy
+        })
+        .filter(Boolean) as (IMihomoProxy | IMihomoGroup)[]
       groups.push({ ...newGlobal, all: newAll })
     }
   }
+
+  const existingProxyNames = new Set<string>()
+  groups.forEach((group) => {
+    group.all.forEach((proxy) => {
+      existingProxyNames.add(proxy.name)
+    })
+  })
+
+  for (const item of chainedProxies) {
+    if (existingProxyNames.has(item.name)) continue
+    const targetGroup = groups.find((group) => group.name === item.group)
+    if (!targetGroup) continue
+
+    const chainStatus = resolvedChained.get(item.name) || {
+      id: item.id,
+      group: item.group,
+      dialerProxy: item.dialerProxy,
+      landingProxy: item.landingProxy,
+      status: 'invalid' as const,
+      reason: 'landing-missing',
+      derived: true as const
+    }
+
+    const placeholder: IMihomoProxy = {
+      alive: false,
+      extra: {},
+      history: [],
+      id: item.id,
+      name: item.name,
+      tfo: false,
+      type: item.lastKnownType || 'Compatible',
+      udp: false,
+      uot: false,
+      xudp: false,
+      mptcp: false,
+      smux: false,
+      chain: {
+        ...chainStatus,
+        reason: mapChainedReason(chainStatus.reason)
+      }
+    }
+    targetGroup.all.push(placeholder)
+  }
+
+  groups.forEach((group) => {
+    group.all = group.all.map((proxy) => {
+      if ('all' in proxy) return proxy
+      if (!proxy.chain) return proxy
+      return {
+        ...proxy,
+        chain: {
+          ...proxy.chain,
+          reason: proxy.chain.reason ? mapChainedReason(proxy.chain.reason) : undefined
+        }
+      }
+    })
+  })
+
   if (mode === 'global') {
     const global = groups.findIndex((group) => group.name === 'GLOBAL')
-    groups.unshift(groups.splice(global, 1)[0])
+    if (global !== -1) {
+      groups.unshift(groups.splice(global, 1)[0])
+    }
   }
   return groups
 }

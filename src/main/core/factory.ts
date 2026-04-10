@@ -10,7 +10,8 @@ import {
   getOverride,
   getOverrideItem,
   getOverrideConfig,
-  getAppConfig
+  getAppConfig,
+  getCurrentProfileChainedProxies
 } from '../config'
 import {
   mihomoProfileWorkDir,
@@ -22,6 +23,7 @@ import {
 import { parse, stringify } from '../utils/yaml'
 import { deepMerge } from '../utils/merge'
 import { createLogger } from '../utils/logger'
+import { applyChainedProxies, collectBaseProxies } from '../utils/chainedProxy'
 
 const factoryLogger = createLogger('Factory')
 
@@ -68,7 +70,13 @@ export async function generateProfile(): Promise<string | undefined> {
     controlSniff = true,
     useNameserverPolicy
   } = await getAppConfig()
-  const currentProfile = await overrideProfile(current, await getProfile(current))
+  let currentProfile = await overrideProfile(current, await getProfile(current))
+  const chainedProxies = await getCurrentProfileChainedProxies()
+  if (chainedProxies.length > 0) {
+    const availableProxies = await collectBaseProxies(currentProfile, current, diffWorkDir)
+    const chainedResult = applyChainedProxies(currentProfile, chainedProxies, availableProxies)
+    currentProfile = chainedResult.profile
+  }
   let controledMihomoConfig = await getControledMihomoConfig()
 
   // 根据开关状态过滤控制配置

@@ -55,6 +55,14 @@ interface IpcApi {
   getProfileItem: (id: string | undefined) => Promise<IProfileItem>
   getProfileStr: (id: string) => Promise<string>
   setProfileStr: (id: string, str: string) => Promise<void>
+  getCurrentProfileChainedProxies: () => Promise<IChainedProxyItem[]>
+  upsertCurrentProfileChainedProxy: (
+    item: Omit<IChainedProxyItem, 'createdAt' | 'updatedAt'> & {
+      createdAt?: number
+      updatedAt?: number
+    }
+  ) => Promise<IChainedProxyItem>
+  removeCurrentProfileChainedProxy: (id: string) => Promise<void>
   addProfileItem: (item: Partial<IProfileItem>) => Promise<void>
   removeProfileItem: (id: string) => Promise<void>
   updateProfileItem: (item: IProfileItem) => Promise<void>
@@ -212,6 +220,9 @@ export const {
   getProfileItem,
   getProfileStr,
   setProfileStr,
+  getCurrentProfileChainedProxies,
+  upsertCurrentProfileChainedProxy,
+  removeCurrentProfileChainedProxy,
   addProfileItem,
   removeProfileItem,
   updateProfileItem,

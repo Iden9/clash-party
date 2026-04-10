@@ -146,6 +146,16 @@ interface IMihomoDelay {
   message?: string
 }
 
+interface IChainedProxyStatus {
+  id: string
+  group: string
+  dialerProxy: string
+  landingProxy: string
+  status: 'valid' | 'invalid'
+  reason?: string
+  derived: true
+}
+
 interface IMihomoProxy {
   alive: boolean
   extra: Record<string, { alive: boolean; history: IMihomoHistory[] }>
@@ -163,6 +173,7 @@ interface IMihomoProxy {
   'routing-mark'?: number
   'provider-name'?: string
   'dialer-proxy'?: string
+  chain?: IChainedProxyStatus
 }
 
 interface IMihomoGroup {
@@ -507,6 +518,18 @@ interface ISubscriptionUserInfo {
   expire: number
 }
 
+interface IChainedProxyItem {
+  id: string
+  name: string
+  group: string
+  dialerProxy: string
+  landingProxy: string
+  enabled?: boolean
+  createdAt: number
+  updatedAt: number
+  lastKnownType?: MihomoProxyType
+}
+
 interface IProfileItem {
   id: string
   type: 'remote' | 'local'
@@ -525,6 +548,7 @@ interface IProfileItem {
   authToken?: string
   userAgent?: string
   updateTimeout?: number
+  chainedProxies?: IChainedProxyItem[]
 }
 
 interface ISubStoreSub {
